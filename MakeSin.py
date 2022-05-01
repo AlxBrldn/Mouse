@@ -13,11 +13,12 @@ from skimage.data import shepp_logan_phantom
 from scipy.optimize import minimize
 from scipy.optimize import fmin
 from natsort import natsorted
+import imageio
 from PIL import Image
 import PIL
 
 def hi2(pf, pl):
-	pl = np.array(pl)
+	pl = np.asarray(pl, dtype='uint8')
 	pl = pl[:,:,0] + pl[:,:,1] + pl[:,:,2]
 	return np.power((pf-pl)[:,SHIFT:-SHIFT], 2).sum(axis=1)
 
@@ -32,13 +33,13 @@ def Calibr_Axis():
 		byte_content = file.read()
 		pl = [byte_content[i + 1] << 8 | byte_content[i] for i in range(0, len(byte_content), 2)]
 		
-	pf = np.asarray(pf).reshape(PROJ_RESOL)
-	pl = np.asarray(pl).reshape(PROJ_RESOL)
+	pf = np.asarray(pf, dtype='uint8').reshape(PROJ_RESOL)
+	pl = np.asarray(pl, dtype='uint8').reshape(PROJ_RESOL)
 	plt.imsave(DIR_PROJ+"\\pf.jpg", pf, cmap = plt.cm.gray)
 	plt.imsave(DIR_PROJ+"\\pl.jpg", pl, cmap = plt.cm.gray)
 		
 	pf = Image.open(DIR_PROJ+"\\pf.jpg")
-	pf = np.array(pf)
+	pf = np.asarray(pf, dtype='uint8')
 	pf = pf[:,:,0] + pf[:,:,1] + pf[:,:,2]
 	pl = Image.open(DIR_PROJ+"\\pl.jpg").transpose(PIL.Image.FLIP_LEFT_RIGHT) #Image.open(DIR_PROJ+"\\pf.jpg").rotate(2, translate=(0,0))#Image.open(DIR_PROJ+"\\pl.jpg").transpose(PIL.Image.FLIP_LEFT_RIGHT)
 	
@@ -54,40 +55,45 @@ def Calibr_Axis():
 	plt.plot([i for i in range(0, pf.shape[0])], min_shifts)
 	plt.show()
 
-def MakeSin(isin, DIR_PROJ, STEP):
+def MakeSin(isin, DIR_PROJ):
 	files = os.listdir(DIR_PROJ)
 	files = natsorted(files)
 	sinogram = list()
-	for fn in files[::STEP]:
+	for fn in files:
 		p = np.array(Image.open(DIR_PROJ+"\\"+fn))[isin]
-		p = p[:,0] + p[:,1] + p[:,2]
+		#p = p[:,0] + p[:,1] + p[:,2]
 		sinogram.append(p)
 		print("Process file: ", fn, end="\r")
-	plt.imsave(DIR_SIN+"\\s"+str(isin)+".jpg", np.asarray(sinogram), cmap = plt.cm.gray)
+	plt.imsave(DIR_SIN+"\\s"+str(isin)+".jpg", np.asarray(sinogram, dtype='uint8'), cmap = plt.cm.gray)
 	
 def divideIminAll():    # For creation sinograms with dark and flat files
 	files = os.listdir(DIR_RAW_PROJ)
-	files = natsorted(files)
+	files = natsorted(files)#[::-1]
 	
 	dfn = os.listdir(DIR_DARK)
 	dfn = natsorted(dfn)
 	darkstep = round(len(files)/len(dfn))
 	
 	ffn = os.listdir(DIR_FLAT)
-	ffn = natsorted(ffn)
+	ffn = natsorted(ffn)#[::-1]
 	flatstep = round(len(files)/len(ffn))
+	
+	if DIR_FLAT=="":
+		flate = np.zeros(PROJ_RESOL)
+	if DIR_DARK=="":
+		dark = np.zeros(PROJ_RESOL)
 	
 	i=0
 	di=0
 	fi=0
 	for fn in files:
-		if (i)%darkstep==0 or i==0 and i!=1:
+		if (i)%darkstep==0 or i==0 and i!=1 and DIR_DARK!="":
 			with open(DIR_DARK+"\\"+dfn[di], "rb") as file:
 				byte_content = file.read()
 				dark = [byte_content[u + 1] << 8 | byte_content[u] for u in range(0, len(byte_content), 2)]
 			dark = np.asarray(dark).reshape(PROJ_RESOL)
 			di += 1
-		if (i)%flatstep==0 or i==0 and i!=1:
+		if (i)%flatstep==0 or i==0 and i!=1 and DIR_FLAT!="":
 			with open(DIR_FLAT+"\\"+ffn[fi], "rb") as file:
 				byte_content = file.read()
 				flate = [byte_content[u + 1] << 8 | byte_content[u] for u in range(0, len(byte_content), 2)]
@@ -97,10 +103,11 @@ def divideIminAll():    # For creation sinograms with dark and flat files
 		with open(DIR_RAW_PROJ+"\\"+fn, "rb") as file:
 			byte_content = file.read()
 			proj = [byte_content[u + 1] << 8 | byte_content[u] for u in range(0, len(byte_content), 2)]
-			
-		proj = np.asarray(proj).reshape(PROJ_RESOL)	
-		proj = np.divide(proj-dark, flate-dark)
-		plt.imsave(DIR_PROJ+"\\sp_"+str(i)+".jpg", proj, cmap = plt.cm.gray)
+		
+		proj = np.asarray(proj).reshape(PROJ_RESOL)
+		proj = np.asarray(np.around(255*np.divide((proj-dark), (flate-dark))), dtype='uint8')
+		imageio.imwrite(DIR_PROJ+"\\sp_"+str(i)+".bmp", proj)
+		#plt.imsave(DIR_PROJ+"\\sp_"+str(i)+".bmp", proj, cmap = plt.cm.gray)
 		print ("Complete: ", round(i*100/len(files), 1), "%", end="\r")
 		i += 1
 
@@ -110,7 +117,7 @@ if os.path.isdir(DIR_PROJ+"\\")==False:
 	print("Starting projection processing...")
 	print (" ", end="\r")
 	divideIminAll()
-if USE_CALIBR==True:
+if USE_CALIBR_AXIS==True:
 	print("Axis calibration is started... ")
 	Calibr_Axis()
 	print("Done.")
@@ -120,5 +127,5 @@ if os.path.isdir(DIR_SIN+"\\")==False:
 	print("Done.")
 print("Creating sinograms...")
 for i in MAKE_ISIN:
-	th = Thread(target=MakeSin, args=(i, DIR_PROJ, STEP))
+	th = Thread(target=MakeSin, args=(i, DIR_PROJ))
 	th.start()
